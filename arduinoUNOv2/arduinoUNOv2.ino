@@ -61,7 +61,7 @@ void setup() {
   network.begin(90, serverNodeId);
 
   //Ethernet setup
-  Ethernet.begin(mac); // to dziala, dostaje IP po DHCP
+  Ethernet.begin(mac);
   Udp.begin(localPort);
   Serial.print(Ethernet.localIP());
   Serial.print(F(":"));
@@ -90,6 +90,7 @@ void loop() {
   }
 }
 
+//Receives UDP Packets
 void receiveUDPPacket() {
   int packetSize = Udp.parsePacket();
   if (packetSize) {
@@ -102,7 +103,7 @@ void receiveUDPPacket() {
   }
 }
 
-//Poniewaz przekazujemy pointer potrzeba rozmiaru
+//Locating end of header in a CoAP message
 void processPacket(byte *packetBuffer, int packetSize) {
   uint16_t hederSize = 0;
   for (int i = 0; i < packetSize; i++) {
@@ -119,17 +120,18 @@ void processPacket(byte *packetBuffer, int packetSize) {
   processIncomingHeader(packetBuffer, hederSize);
 }
 
+//Processing the header of a CoAP message
 void processIncomingHeader(byte *packetHeader, uint16_t headerSize) {
 
-  //Sprawdzam czy wersja protokolu sie zgadza
+  //Check if the protocol version is 01
   if (!bitRead(packetHeader[0], 7) && bitRead(packetHeader[0], 6)) {
     Serial.print(F("Ver: 01; "));
   } else {
-    //jesli nie, ignoruje pakiet calkowicie
+    //if it's not, do nothing else with the packet
     return;
   }
 
-  //Odczytuje i zapisuje MessageID
+  //Reading and storing messageID
   short unsigned int messageID = 0;
   messageID |= bitRead(packetHeader[2], 7) << 15;
   messageID |= bitRead(packetHeader[2], 6) << 14;
@@ -148,17 +150,18 @@ void processIncomingHeader(byte *packetHeader, uint16_t headerSize) {
   messageID |= bitRead(packetHeader[3], 1) << 1;
   messageID |= bitRead(packetHeader[3], 0) << 0;
 
-  //Sprawdzam czy CON czy ACK
+  //Checks if the message is ACK, NON or CON
   if (!bitRead(packetHeader[0], 5) && !bitRead(packetHeader[0], 4)) {
     Serial.print(F("CON; "));
     retransmitting = true;
-    //Wymagana retransmisja
+    //Retransmition is ON
   } else if (!bitRead(packetHeader[0], 5) && bitRead(packetHeader[0], 4)) {
     Serial.print(F("NON; "));
     retransmitting = false;
+    //Retransmition is OFF
   } else if (bitRead(packetHeader[0], 5) && !bitRead(packetHeader[0], 4)) {
     Serial.print(F("ACK; "));
-    //Cos zrobic z ACK, usunac pewnie z listy czekajacych wyslanych CON
+    //Removin message from waiting list
 #if SERVER_RETRANSMIT
     bool success = deleteMessageToRetransmit(messageID);
     if (success)
@@ -175,24 +178,19 @@ void processIncomingHeader(byte *packetHeader, uint16_t headerSize) {
     return;
   }
 
-  //Sprawdzam dlugosc tokena
+  //Reading token length
   unsigned short int tokenLenght = bitRead(packetHeader[0], 3) << 3 |
                                    bitRead(packetHeader[0], 2) << 2 |
                                    bitRead(packetHeader[0], 1) << 1 |
                                    bitRead(packetHeader[0], 0) << 0;
 
-  //zapisuje token do zmiennej
+  //Storing token
   char token[tokenLenght + 1];
   memcpy(&token[0], &packetHeader[4], tokenLenght);
-  //  for (int i = 0; i < tokenLenght; i++) {
-  //    token[i] = packetHeader[i + 4];
-  //  }
   token[tokenLenght] = '\0';
-  //zmieniam token na string
-  //String tmp = String(token);
   String tokenString = String(token);
 
-  //OPTIONS
+  //Reading Options
   uint16_t optionsStart = 4 + tokenLenght;
   uint16_t optionsLenght = headerSize - optionsStart;
   Serial.print(F("Header length: "));
@@ -202,12 +200,8 @@ void processIncomingHeader(byte *packetHeader, uint16_t headerSize) {
   Serial.println(F("; "));
   Serial.print(F("Options length: "));
   Serial.println(optionsLenght);
-  //char optionsArray[optionsLenght];
-  //memcpy(optionsArray, &packetHeader[4 + tokenLenght], optionsLenght);
-  //  for (int i = 0; i < optionsLenght; i++) {
-  //    optionsArray[i] = packetHeader[4 + tokenLenght + i];
-  //  }
-  //options nie puste
+
+  //When options are not empty
   uint16_t optionDelta[NumberOfSupportedOptions];
   String optionValue[NumberOfSupportedOptions];
   unsigned short int totalLength = 0;
@@ -217,7 +211,7 @@ void processIncomingHeader(byte *packetHeader, uint16_t headerSize) {
   }
   for (int i = 0; i < NumberOfSupportedOptions; i++)
     if (packetHeader[optionsStart] != -1 && optionsLenght != 0) {
-      //header opcji
+      //Option header
       optionDelta[i] = bitRead(packetHeader[optionsStart + totalLength], 7) << 3 |
                        bitRead(packetHeader[optionsStart + totalLength], 6) << 2 |
                        bitRead(packetHeader[optionsStart + totalLength], 5) << 1 |
@@ -251,11 +245,7 @@ void processIncomingHeader(byte *packetHeader, uint16_t headerSize) {
 
       char tmp[currentLength + 1];
       memcpy(&tmp[0], &packetHeader[optionsStart + totalLength], currentLength);
-      //      int j = 0;
-      //      for (int i = 0; i < currentLength; i++) {
-      //        tmp[i] = packetHeader[optionsStart + i + totalLength];
-      //        //j++;
-      //      }
+
       tmp[currentLength] = '\0';
       optionValue[i] = String(tmp);
       totalLength += currentLength;
@@ -272,7 +262,7 @@ void processIncomingHeader(byte *packetHeader, uint16_t headerSize) {
     }
 
   //CODE
-  //Sprawdzam czy wiadomosc jest typu REQUEST (code: 000-----)
+  //Checks the type if message type is REQUEST (code: 000-----)
   if (!bitRead(packetHeader[1], 7) && !bitRead(packetHeader[1], 6) && !bitRead(packetHeader[1], 5)) {
     if (!bitRead(packetHeader[1], 4) && !bitRead(packetHeader[1], 3) && !bitRead(packetHeader[1], 2) &&
         !bitRead(packetHeader[1], 1) && bitRead(packetHeader[1], 0)) {
@@ -312,9 +302,8 @@ void processIncomingHeader(byte *packetHeader, uint16_t headerSize) {
       }
     } else {
       Serial.print(F("OTHER; "));
-      //Nie implementujemy POST i DELETE
-
-      //To jest CoAP PING
+      //Other
+      //Ping
       if (retransmitting)
         sendACKMessage(messageID);
     }
@@ -324,10 +313,9 @@ void processIncomingHeader(byte *packetHeader, uint16_t headerSize) {
 
   Serial.print(F("Token: "));
   Serial.println(tokenString);
-  //Options
-
 }
 
+//Sends NON messages
 void sendNonMessage(String token, short unsigned int code1, short unsigned int code2, String payload) {
 
   unsigned short int tokenLength = token.length();
@@ -371,13 +359,13 @@ void sendNonMessage(String token, short unsigned int code1, short unsigned int c
   if (payload.length() != 0)
     memcpy(&header[5 + tokenLength], payload.c_str(), payload.length());
 
-  //Wysylam NON
   Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
   int r = Udp.write(header, messageLength);
   Udp.endPacket();
   Serial.println(F("NON Sent"));
 }
 
+//Sends CON message
 void sendConMessage(String token, short unsigned int code1, short unsigned int code2, String payload) {
 
   uint16_t tokenLength = token.length();
@@ -414,7 +402,6 @@ void sendConMessage(String token, short unsigned int code1, short unsigned int c
   if (payload.length() != 0)
     memcpy(&message[5 + tokenLength], payload.c_str(), payload.length());
 
-  //Wysylam CON
   Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
   int r = Udp.write(message, messageLength);
   Udp.endPacket();
@@ -427,6 +414,7 @@ void sendConMessage(String token, short unsigned int code1, short unsigned int c
 
 }
 
+//Sends ACK
 void sendACKMessage(short unsigned int messageID) {
 
   char ackHeader[4];
@@ -448,6 +436,7 @@ void sendACKMessage(short unsigned int messageID) {
   Serial.println(F("ACK Sent"));
 }
 
+//Displays bits of header - for debug purposes only
 void showHeaderBits(char *packetBuffer) {
   int lenght = sizeof(packetBuffer) / sizeof(packetBuffer[0]);
   for (int j = 0; j < lenght; j++) {
@@ -458,6 +447,7 @@ void showHeaderBits(char *packetBuffer) {
   Serial.print(F("\n"));
 }
 
+//Sends Well-known response
 void sendWellKnownResponse(bool isCON, short unsigned int messageID, char token[]) {
   String payload = getWellKnown();
   uint16_t msgLength = payload.length() + 6;
@@ -484,11 +474,13 @@ void sendWellKnownResponse(bool isCON, short unsigned int messageID, char token[
   free(&message);
 }
 
+//Sends UDP messages
 void writeThroughUDP(char msg) {
   Udp.beginPacket(remoteIp, remoteP);
   Udp.write(msg);
   Udp.endPacket();
 }
+
 
 bool isWellKnown(String optionValue) {
   String wellKnown = ".well-known";
